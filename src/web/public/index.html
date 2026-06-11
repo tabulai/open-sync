@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Open Sync</title>
+<script nonce="{{cspNonce}}">
+  document.documentElement.classList.toggle(
+    'desktop-shell',
+    new URLSearchParams(window.location.search).get('shell') === 'desktop' || navigator.userAgent.includes('Electron')
+  );
+</script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #101413;
+    --surface: #171d1c;
+    --surface-strong: #1e2927;
+    --surface-soft: #13201e;
+    --border: #2d3c39;
+    --border-strong: #3f5751;
+    --text: #edf2ef;
+    --muted: #aab8b2;
+    --muted-strong: #d1dad5;
+    --primary: #0f766e;
+    --primary-hover: #0b5f59;
+    --success: #15803d;
+    --success-hover: #166534;
+    --danger: #a83227;
+    --danger-hover: #8f261e;
+    --warning: #b38600;
+    --shadow: rgba(0, 0, 0, 0.34);
+  }
+  body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .header { background: var(--surface); min-height: 68px; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+  .desktop-shell .header { padding-left: 92px; -webkit-app-region: drag; user-select: none; }
+  .header h1 { font-size: 20px; font-weight: 600; line-height: 1.2; white-space: nowrap; }
+  .header .actions { display: flex; gap: 8px; }
+  .desktop-shell .header .actions,
+  .desktop-shell button,
+  .desktop-shell input,
+  .desktop-shell select,
+  .desktop-shell .modal { -webkit-app-region: no-drag; }
+  .container { max-width: 960px; margin: 24px auto; padding: 0 24px; }
+  button { background: var(--primary); color: #f7fffb; border: 1px solid color-mix(in srgb, var(--primary) 68%, white 16%); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  button:hover { background: var(--primary-hover); }
+  button:focus-visible,
+  input:focus-visible { outline: 2px solid #f5c542; outline-offset: 2px; }
+  button.danger { background: var(--danger); border-color: #cf4a3d; }
+  button.danger:hover { background: var(--danger-hover); }
+  button.success { background: var(--success); border-color: #3aa35f; }
+  button.success:hover { background: var(--success-hover); }
+  input, select { background: #111817; color: var(--text); border: 1px solid var(--border-strong); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+  input::placeholder { color: #83928d; opacity: 1; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .card-header h3 { font-size: 16px; }
+  .status { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+  .status.connected { background: #123f24; color: #a8f0be; }
+  .status.disconnected { background: #4a2c21; color: #ffb197; }
+  .status.error { background: #463710; color: #f7d76b; }
+  .device-info { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .device-error { margin: -2px 0 12px; padding: 8px 10px; border: 1px solid rgba(179, 134, 0, 0.45); border-radius: 6px; background: rgba(179, 134, 0, 0.12); color: #f6d983; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+  .device-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .device-apps { margin: 12px 0 10px; }
+  .device-apps-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .tunnels { margin-top: 12px; }
+  .tunnel-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; border-top: 1px solid var(--border); }
+  .tunnel-row:first-child { border-top: none; }
+  .modal-overlay { display: none; position: fixed; inset: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.64); z-index: 100; justify-content: center; align-items: center; padding: 16px; }
+  .modal-overlay.active { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; min-width: 400px; max-height: calc(100vh - 32px); overflow: auto; box-shadow: 0 24px 54px var(--shadow); }
+  #addModal .modal { width: min(760px, calc(100vw - 40px)); }
+  .modal h2 { margin-bottom: 16px; font-size: 18px; }
+  .modal .field { margin-bottom: 12px; }
+  .modal .field label { display: block; margin-bottom: 4px; font-size: 13px; color: var(--muted-strong); }
+  .modal .field input { width: 100%; }
+  .modal .field input[readonly] { color: #c2d1cb; background: rgba(17, 24, 23, 0.72); }
+  .modal .field-grid { display: grid; grid-template-columns: 1.7fr 1fr 0.7fr; gap: 12px; margin-bottom: 12px; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .helper { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .selected-device { display: none; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: rgba(19, 32, 30, 0.74); }
+  .selected-device.active { display: flex; }
+  .selected-device-icon { width: 38px; height: 38px; border-radius: 8px; display: grid; place-items: center; color: var(--selected-device-accent, #c4d4ef); background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.01)); box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 0 0 1px color-mix(in srgb, var(--selected-device-accent, #c4d4ef) 26%, transparent); }
+  .selected-device-icon svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .selected-device-copy { min-width: 0; }
+  .selected-device-title { font-size: 13px; font-weight: 600; color: #eef5ff; }
+  .selected-device-subtitle { font-size: 12px; color: #a7bab2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .discovery-map { position: relative; padding: 28px 18px 18px; border: 1px solid var(--border-strong); border-radius: 8px; margin-bottom: 16px; overflow: visible; background:
+    radial-gradient(circle at top, rgba(15, 118, 110, 0.22), transparent 45%),
+    linear-gradient(180deg, rgba(19, 32, 30, 0.95), rgba(20, 26, 25, 0.92)); }
+  .discovery-map::before { content: ''; position: absolute; inset: 0; background-image:
+    linear-gradient(rgba(112, 141, 132, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(112, 141, 132, 0.12) 1px, transparent 1px);
+    background-size: 32px 32px; mask-image: linear-gradient(180deg, rgba(0,0,0,0.8), transparent 90%); border-radius: inherit; pointer-events: none; }
+  .discovery-map-header { position: relative; z-index: 1; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  .discovery-map-title { font-size: 13px; color: #d7eee7; text-transform: uppercase; letter-spacing: 0.08em; }
+  .discovery-map-subtitle { font-size: 12px; color: #a7bab2; text-align: right; }
+  .discovery-constellation { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); gap: 14px; }
+  .discovery-node { position: relative; min-height: 138px; padding: 14px 10px 12px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--device-accent) 42%, transparent); background:
+    linear-gradient(180deg, rgba(18, 28, 27, 0.88), rgba(23, 32, 30, 0.94));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 12px 30px rgba(4, 10, 22, 0.28);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; cursor: pointer;
+    transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease, background 120ms ease; }
+  .discovery-node:hover,
+  .discovery-node:focus-visible { transform: translateY(-2px); border-color: color-mix(in srgb, var(--device-accent) 88%, white 10%); box-shadow: 0 18px 32px rgba(4, 10, 22, 0.34), 0 0 0 1px rgba(255,255,255,0.05); outline: none; }
+  .discovery-node.selected { border-color: color-mix(in srgb, var(--device-accent) 96%, white 8%); box-shadow: 0 0 0 2px color-mix(in srgb, var(--device-accent) 48%, transparent), 0 18px 32px rgba(4, 10, 22, 0.34); }
+  .discovery-icon-shell { width: 60px; height: 60px; border-radius: 8px; display: grid; place-items: center; color: var(--device-accent); background:
+    radial-gradient(circle at top, color-mix(in srgb, var(--device-accent) 26%, transparent), transparent 65%),
+    linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.01));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 0 1px color-mix(in srgb, var(--device-accent) 26%, transparent); }
+  .discovery-icon-shell svg { width: 38px; height: 38px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .discovery-name { font-size: 13px; font-weight: 600; color: #eef5ff; line-height: 1.2; }
+  .discovery-host { font-size: 11px; color: #a7bab2; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .discovery-tooltip { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translate(-50%, 8px); width: min(240px, calc(100vw - 56px)); padding: 12px 13px; border-radius: 8px; border: 1px solid var(--border-strong); background: rgba(11, 15, 14, 0.97); color: #dbe9ff; box-shadow: 0 14px 28px rgba(0,0,0,0.35); opacity: 0; pointer-events: none; transition: opacity 120ms ease, transform 120ms ease; text-align: left; z-index: 12; }
+  .discovery-node:hover .discovery-tooltip,
+  .discovery-node:focus-visible .discovery-tooltip { opacity: 1; transform: translate(-50%, 0); }
+  .discovery-tooltip-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #ffffff; }
+  .discovery-tooltip-line { font-size: 11px; color: #b9cbc5; line-height: 1.45; word-break: break-word; }
+  .discovery-empty { position: relative; z-index: 1; padding: 16px 4px 4px; color: var(--muted); font-size: 13px; text-align: center; }
+  .empty { text-align: center; padding: 48px; color: #7f8e88; }
+  #toast { display: none; position: fixed; top: 82px; right: 24px; max-width: min(420px, calc(100vw - 48px)); background: var(--success); color: #fff; padding: 12px 20px; border-radius: 8px; font-size: 13px; z-index: 200; box-shadow: 0 16px 36px var(--shadow); }
+  #toast.error { background: var(--danger); }
+  @media (max-width: 640px) {
+    .header { padding: 14px 18px; min-height: 62px; }
+    .desktop-shell .header { padding-left: 88px; }
+    .container { padding: 0 18px; }
+    .modal-overlay { align-items: flex-start; padding: 12px; }
+    #addModal .modal { width: 100%; padding: 18px; }
+    .modal { min-width: 0; width: 100%; }
+    .modal h2 { margin-bottom: 12px; }
+    .modal .field { margin-bottom: 10px; }
+    .modal .field-grid { grid-template-columns: 1fr; gap: 0; }
+    .helper { line-height: 1.3; margin-bottom: 6px; }
+    .discovery-map { padding: 18px 14px 14px; margin-bottom: 12px; }
+    .discovery-map-header { margin-bottom: 12px; }
+    .discovery-empty { padding: 10px 4px 2px; }
+    .discovery-map-header { flex-direction: column; align-items: flex-start; }
+    .discovery-map-subtitle { text-align: left; }
+    .discovery-constellation { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #toast { top: 74px; left: 12px; right: 12px; bottom: auto; max-width: none; }
+    body.toast-visible:has(.modal-overlay.active) .modal-overlay { padding-top: 74px; }
+    body.toast-visible:has(.modal-overlay.active) .modal { max-height: calc(100vh - 86px); }
+    body.toast-visible:has(.modal-overlay.active) #toast { top: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Open Sync</h1>
+  <div class="actions">
+    <button id="addDeviceButton" type="button">Add Device</button>
+  </div>
+</div>
+
+<div class="container">
+  <div id="devices"></div>
+</div>
+
+<!-- Add Device Modal -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="addDeviceTitle">
+    <h2 id="addDeviceTitle">Add Device</h2>
+    <div id="discovered-list"></div>
+    <div class="selected-device" id="selectedDevice">
+      <div class="selected-device-icon" id="selectedDeviceIcon"></div>
+      <div class="selected-device-copy">
+        <div class="selected-device-title" id="selectedDeviceTitle"></div>
+        <div class="selected-device-subtitle" id="selectedDeviceSubtitle"></div>
+      </div>
+    </div>
+    <div class="field-grid">
+      <div class="field">
+        <label for="sshHost">SSH Host</label>
+        <input id="sshHost" placeholder="device.local" />
+      </div>
+      <div class="field">
+        <label for="sshUsername">SSH Username</label>
+        <input id="sshUsername" placeholder="account name" />
+      </div>
+      <div class="field">
+        <label for="sshPort">Port</label>
+        <input id="sshPort" type="number" min="1" max="65535" placeholder="22" />
+      </div>
+    </div>
+    <div class="helper" id="addDeviceHelp">Pick a discovered device to prefill the connection target, then enter the SSH username used on that machine. If this is the first connection, provide its SSH password so Open Sync can install your key.</div>
+    <div class="field">
+      <label for="sshPassword">Password (optional, for first-time key setup)</label>
+      <input id="sshPassword" type="password" placeholder="Leave empty for key-based auth" aria-describedby="addDeviceHelp" />
+    </div>
+    <div class="actions">
+      <button id="cancelAddDeviceButton" type="button">Cancel</button>
+      <button id="confirmAddDeviceButton" class="success" type="button">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tunnel Modal -->
+<div class="modal-overlay" id="tunnelModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tunnelTitle">
+    <h2 id="tunnelTitle">Open Tunnel</h2>
+    <div class="field">
+      <label for="tunnelPort">Remote Port</label>
+      <input id="tunnelPort" type="number" placeholder="8888" />
+    </div>
+    <input type="hidden" id="tunnelHostname" />
+    <div class="actions">
+      <button id="cancelTunnelButton" type="button">Cancel</button>
+      <button id="confirmTunnelButton" class="success" type="button">Open</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script nonce="{{cspNonce}}">
+const API = '';
+let API_TOKEN = '';
+let discoveredHosts = [];
+let selectedDiscoveryKey = '';
+let toastTimer;
+let lastDevicesSnapshot = '';
+let devicesLoadInFlight = null;
+let devicesReloadQueued = false;
+
+async function readApiToken() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const token = params.get('token');
+  if (token) {
+    history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    return token;
+  }
+
+  const res = await fetch('/api/session', {
+    headers: { Accept: 'application/json' },
+  });
+  const data = await res.json();
+  if (!res.ok || !data.apiToken) {
+    throw new Error(data.error || 'Unable to initialize Open Sync API session.');
+  }
+  return data.apiToken;
+}
+
+function resolveTargetHost(hostname) {
+  const normalized = String(hostname || '').trim().replace(/\.+$/, '');
+  if (!normalized) return normalized;
+  if (normalized === 'localhost' || normalized.includes('.') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalized)) {
+    return normalized;
+  }
+  return `${normalized}.local`;
+}
+
+function getDiscoveryKey(host) {
+  return `${host.host}:${host.port}`;
+}
+
+function clearElement(node) {
+  node.replaceChildren();
+}
+
+function createElement(tagName, { className, text } = {}) {
+  const node = document.createElement(tagName);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function createActionButton(label, { className = '', onClick, styleText = '', ariaLabel = '' } = {}) {
+  const button = createElement('button', { className, text: label });
+  button.type = 'button';
+  if (ariaLabel) {
+    button.setAttribute('aria-label', ariaLabel);
+  }
+  if (styleText) {
+    button.style.cssText = styleText;
+  }
+  if (onClick) {
+    button.addEventListener('click', onClick);
+  }
+  return button;
+}
+
+function cleanDiscoveryLabel(value) {
+  return String(value || '')
+    .replace(/\s+SSH$/i, '')
+    .replace(/\.local$/i, '')
+    .trim();
+}
+
+function getShortHost(hostname) {
+  return cleanDiscoveryLabel(String(hostname || '').split('.')[0]);
+}
+
+function inferDeviceKind(host) {
+  const haystack = `${host.name || ''} ${host.host || ''}`.toLowerCase();
+  if (haystack.includes('accelerated') || haystack.includes('gpu') || haystack.includes('compute')) {
+    return { id: 'accelerated-node', label: 'Accelerated Node', accent: '#69d27c' };
+  }
+  if (haystack.includes('studio') || haystack.includes('workstation')) {
+    return { id: 'desktop-workstation', label: 'Desktop Workstation', accent: '#7ad0ff' };
+  }
+  if (haystack.includes('mini') || haystack.includes('compact')) {
+    return { id: 'compact-desktop', label: 'Compact Desktop', accent: '#9eb7ff' };
+  }
+  if (haystack.includes('book') || haystack.includes('laptop')) {
+    return { id: 'notebook', label: 'Notebook', accent: '#f6c86b' };
+  }
+  if (haystack.includes('all-in-one') || haystack.includes('display')) {
+    return { id: 'all-in-one', label: 'All-in-One', accent: '#6fded0' };
+  }
+  if (haystack.includes('raspberry')) {
+    return { id: 'edge-board', label: 'Edge Board', accent: '#ff8ea8' };
+  }
+  return { id: 'server', label: getShortHost(host.host) || cleanDiscoveryLabel(host.name), accent: '#c4d4ef' };
+}
+
+function getShortDeviceName(host) {
+  return inferDeviceKind(host).label;
+}
+
+function getDeviceIconSvg(kindId) {
+  switch (kindId) {
+    case 'desktop-workstation':
+      return `<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="10" width="24" height="18" rx="5"></rect><path d="M12 29h16"></path><circle cx="27" cy="19" r="1.2"></circle></svg>`;
+    case 'compact-desktop':
+      return `<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="11" width="24" height="16" rx="6"></rect><path d="M14 28h12"></path><circle cx="27" cy="19" r="1.2"></circle></svg>`;
+    case 'notebook':
+      return `<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="10" y="10" width="20" height="14" rx="2"></rect><path d="M7 28h26"></path><path d="M13 28l1.5 2h11L27 28"></path></svg>`;
+    case 'all-in-one':
+      return `<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="8" y="9" width="24" height="16" rx="3"></rect><path d="M20 25v5"></path><path d="M15 31h10"></path></svg>`;
+    case 'edge-board':
+      return `<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="12" y="12" width="16" height="16" rx="3"></rect><path d="M9 17h3M9 23h3M28 17h3M28 23h3M17 9v3M23 9v3M17 28v3M23 28v3"></path></svg>`;
+    case 'accelerated-node':
+      return `<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="9" y="12" width="22" height="16" rx="4"></rect><path d="M20 10v20"></path><path d="M14 20h12"></path><path d="M16 14l8 12"></path><path d="M24 14l-8 12"></path></svg>`;
+    default:
+      return `<svg viewBox="0 0 40 40" aria-hidden="true"><rect x="11" y="8" width="18" height="24" rx="3"></rect><path d="M15 14h10M15 19h10M15 24h10"></path></svg>`;
+  }
+}
+
+function updateSelectedDeviceBanner(host) {
+  const banner = document.getElementById('selectedDevice');
+  const icon = document.getElementById('selectedDeviceIcon');
+  const title = document.getElementById('selectedDeviceTitle');
+  const subtitle = document.getElementById('selectedDeviceSubtitle');
+
+  if (!host) {
+    banner.classList.remove('active');
+    icon.innerHTML = '';
+    title.textContent = '';
+    subtitle.textContent = '';
+    return;
+  }
+
+  const kind = inferDeviceKind(host);
+  banner.classList.add('active');
+  banner.style.setProperty('--selected-device-accent', kind.accent);
+  icon.innerHTML = getDeviceIconSvg(kind.id);
+  title.textContent = cleanDiscoveryLabel(host.name) || host.host;
+  subtitle.textContent = `${host.host}:${host.port}`;
+}
+
+function resetAddForm() {
+  document.getElementById('sshHost').value = '';
+  document.getElementById('sshUsername').value = '';
+  document.getElementById('sshPort').value = '';
+  document.getElementById('sshPassword').value = '';
+  selectedDiscoveryKey = '';
+  updateSelectedDeviceBanner(null);
+}
+
+function createDiscoveryTooltip(host) {
+  const tooltip = createElement('div', { className: 'discovery-tooltip' });
+  const tooltipTitle = createElement('div', {
+    className: 'discovery-tooltip-title',
+    text: cleanDiscoveryLabel(host.name) || host.host,
+  });
+  const username = host.suggestedUsername || 'SSH account not advertised';
+  const addresses = host.addresses && host.addresses.length > 0 ? host.addresses.join(', ') : 'No IP addresses advertised';
+  tooltip.append(
+    tooltipTitle,
+    createElement('div', { className: 'discovery-tooltip-line', text: `Host: ${host.host}:${host.port}` }),
+    createElement('div', { className: 'discovery-tooltip-line', text: `SSH account: ${username}` }),
+    createElement('div', { className: 'discovery-tooltip-line', text: `IPs: ${addresses}` }),
+  );
+  return tooltip;
+}
+
+function renderDiscoveredHosts(hosts, emptyText = 'No SSH-capable devices were found on the local network.') {
+  const list = document.getElementById('discovered-list');
+  clearElement(list);
+
+  const map = document.createElement('div');
+  map.className = 'discovery-map';
+
+  const header = createElement('div', { className: 'discovery-map-header' });
+  header.append(
+    createElement('div', { className: 'discovery-map-title', text: 'Discovered Network' }),
+    createElement('div', { className: 'discovery-map-subtitle', text: 'Hover for details. Click a device to prefill its SSH settings.' }),
+  );
+  map.appendChild(header);
+
+  if (hosts.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'discovery-empty';
+    empty.textContent = emptyText;
+    map.appendChild(empty);
+    list.appendChild(map);
+    return;
+  }
+
+  const constellation = document.createElement('div');
+  constellation.className = 'discovery-constellation';
+
+  for (const host of hosts) {
+    const kind = inferDeviceKind(host);
+    const shortName = getShortDeviceName(host);
+    const node = document.createElement('button');
+    node.type = 'button';
+    node.className = 'discovery-node';
+    node.style.setProperty('--device-accent', kind.accent);
+    node.title = `${cleanDiscoveryLabel(host.name) || host.host} • ${host.host}:${host.port}`;
+    if (selectedDiscoveryKey === getDiscoveryKey(host)) {
+      node.classList.add('selected');
+    }
+    const iconShell = createElement('div', { className: 'discovery-icon-shell' });
+    iconShell.innerHTML = getDeviceIconSvg(kind.id);
+    node.append(
+      iconShell,
+      createElement('div', { className: 'discovery-name', text: shortName }),
+      createElement('div', { className: 'discovery-host', text: getShortHost(host.host) }),
+      createDiscoveryTooltip(host),
+    );
+    node.addEventListener('click', () => fillDiscoveredHost(host));
+    constellation.appendChild(node);
+  }
+
+  map.appendChild(constellation);
+  list.appendChild(map);
+}
+
+function toast(msg, isError) {
+  const t = document.getElementById('toast');
+  clearTimeout(toastTimer);
+  t.textContent = msg;
+  t.className = isError ? 'error' : '';
+  t.style.display = 'block';
+  document.body.classList.add('toast-visible');
+  toastTimer = setTimeout(() => {
+    t.style.display = 'none';
+    document.body.classList.remove('toast-visible');
+  }, 3000);
+}
+
+async function api(path, opts) {
+  const headers = new Headers(opts?.headers || {});
+  if (API_TOKEN) {
+    headers.set('X-Open-Sync-Token', API_TOKEN);
+  }
+  const res = await fetch(API + path, { ...(opts || {}), headers });
+  const data = await res.json();
+  if (!res.ok) {
+    const error = new Error(data.error || 'Request failed');
+    Object.assign(error, data);
+    throw error;
+  }
+  return data;
+}
+
+function confirmHostKeyTrust(err, retry) {
+  if (err.code !== 'HOST_KEY_TRUST_REQUIRED' || !err.fingerprint) return false;
+  const ok = confirm(
+    `Verify this SSH host key fingerprint before continuing:\n\n${err.host || err.hostname}\n${err.fingerprint}\n\nOnly continue if it matches the fingerprint shown on that device.`
+  );
+  if (ok) retry(err.fingerprint);
+  return true;
+}
+
+// Latest-wins guard: user actions and the poll timer call loadDevices
+// without awaiting, so overlapping runs used to interleave renders into the
+// same container. A call during an in-flight load queues exactly one trailing
+// re-run (rather than reusing the stale in-flight result, which could miss
+// the state change that triggered the call).
+function loadDevices() {
+  if (devicesLoadInFlight) {
+    devicesReloadQueued = true;
+    return devicesLoadInFlight;
+  }
+  devicesLoadInFlight = fetchAndRenderDevices().finally(() => {
+    devicesLoadInFlight = null;
+    if (devicesReloadQueued) {
+      devicesReloadQueued = false;
+      loadDevices();
+    }
+  });
+  return devicesLoadInFlight;
+}
+
+async function fetchAndRenderDevices() {
+  // Bounded so a stalled request (e.g. after sleep/wake) cannot pin the
+  // in-flight guard above and block every later refresh.
+  const devices = await api('/api/devices', { signal: AbortSignal.timeout(8000) });
+  const entries = [];
+  for (const d of devices) {
+    let status;
+    try { status = await api(`/api/devices/${d.hostname}/status`, { signal: AbortSignal.timeout(8000) }); } catch { status = { status: 'DISCONNECTED', ports: {} }; }
+    entries.push({ device: d, status });
+  }
+
+  // Steady-state polls usually return identical data; skip the DOM teardown
+  // (and its flicker, focus loss, and listener churn) when nothing changed.
+  const snapshot = JSON.stringify(entries);
+  if (snapshot === lastDevicesSnapshot) return;
+  lastDevicesSnapshot = snapshot;
+  renderDevices(entries);
+}
+
+function renderDevices(entries) {
+  const container = document.getElementById('devices');
+  const fragment = document.createDocumentFragment();
+  if (entries.length === 0) {
+    fragment.appendChild(createElement('div', {
+      className: 'empty',
+      text: 'No devices configured. Click "Add Device" to get started.',
+    }));
+  } else {
+    for (const { device, status } of entries) {
+      fragment.appendChild(buildDeviceCard(device, status));
+    }
+  }
+  clearElement(container);
+  container.appendChild(fragment);
+}
+
+function buildDeviceCard(d, status) {
+  const statusClass = status.status === 'RUNNING' ? 'connected' : (status.status === 'ERROR' ? 'error' : 'disconnected');
+  const statusLabel = status.status === 'RUNNING' ? 'Connected' : (status.status === 'ERROR' ? 'Error' : 'Disconnected');
+  const card = createElement('div', { className: 'card' });
+  const header = createElement('div', { className: 'card-header' });
+  const title = createElement('h3', { text: d.hostname });
+  const badge = createElement('span', { className: `status ${statusClass}`, text: statusLabel });
+  header.append(title, badge);
+  card.append(header);
+  card.append(createElement('div', {
+    className: 'device-info',
+    text: `${d.username}@${resolveTargetHost(d.hostname)}:${d.sshPort || 22}`,
+  }));
+  if (status.status === 'ERROR' && status.error) {
+    card.append(createElement('div', {
+      className: 'device-error',
+      text: status.error,
+    }));
+  }
+
+  if (status.status === 'RUNNING') {
+    const apps = createElement('div', { className: 'device-apps' });
+    apps.append(
+      createElement('div', { className: 'device-apps-label', text: 'Apps' }),
+    );
+    const appActions = createElement('div', { className: 'device-actions' });
+    appActions.append(
+      createActionButton('Terminal', { className: 'success', ariaLabel: `Open terminal for ${d.hostname}`, onClick: () => openDeviceTerminal(d.hostname) }),
+      createActionButton('Open Dashboard', { className: 'success', ariaLabel: `Open Open Dashboard for ${d.hostname}`, onClick: () => openDeviceDashboard(d.hostname) }),
+    );
+    apps.append(appActions);
+    card.append(apps);
+  }
+
+  const actions = createElement('div', { className: 'device-actions' });
+  if (status.status !== 'RUNNING') {
+    actions.append(createActionButton('Connect', { className: 'success', ariaLabel: `Connect to ${d.hostname}`, onClick: () => connectDevice(d.hostname) }));
+  } else {
+    actions.append(
+      createActionButton('Disconnect', { ariaLabel: `Disconnect from ${d.hostname}`, onClick: () => disconnectDevice(d.hostname) }),
+      createActionButton('Open Tunnel', { ariaLabel: `Open tunnel for ${d.hostname}`, onClick: () => showTunnelModal(d.hostname) }),
+    );
+  }
+  actions.append(createActionButton('Delete', { className: 'danger', ariaLabel: `Delete ${d.hostname}`, onClick: () => removeDevice(d.hostname) }));
+  card.append(actions);
+
+  const ports = Object.entries(status.ports || {});
+  if (ports.length > 0) {
+    const tunnels = createElement('div', { className: 'tunnels' });
+    const label = document.createElement('strong');
+    label.style.cssText = 'font-size:12px;color:var(--muted);';
+    label.textContent = 'Active Tunnels:';
+    tunnels.append(label);
+    for (const [port, info] of ports) {
+      const row = createElement('div', { className: 'tunnel-row' });
+      row.append(
+        createElement('span', { text: `localhost:${info.localPort} → ${d.hostname}:${port}` }),
+        createActionButton('Close', {
+          className: 'danger',
+          styleText: 'padding:4px 8px;font-size:11px;',
+          ariaLabel: `Close tunnel ${port} for ${d.hostname}`,
+          onClick: () => closeTunnel(d.hostname, Number(port)),
+        }),
+      );
+      tunnels.append(row);
+    }
+    card.append(tunnels);
+  }
+
+  return card;
+}
+
+async function openAddDeviceModal() {
+  resetAddForm();
+  renderDiscoveredHosts([], 'Scanning local network for SSH devices...');
+  showAddModal();
+  toast('Discovering hosts...');
+
+  try {
+    discoveredHosts = await api('/api/discover?timeout=3');
+    renderDiscoveredHosts(discoveredHosts);
+  } catch (err) {
+    renderDiscoveredHosts([], 'Discovery failed. Enter an SSH host manually.');
+    toast(err.message, true);
+  }
+}
+
+function fillDiscoveredHost(host) {
+  selectedDiscoveryKey = getDiscoveryKey(host);
+  renderDiscoveredHosts(discoveredHosts);
+  updateSelectedDeviceBanner(host);
+  const hostInput = document.getElementById('sshHost');
+  const usernameInput = document.getElementById('sshUsername');
+  const portInput = document.getElementById('sshPort');
+  hostInput.value = host.host;
+  portInput.value = host.port && host.port !== 22 ? String(host.port) : '';
+  usernameInput.value = host.suggestedUsername || '';
+
+  if (!host.suggestedUsername) {
+    usernameInput.focus();
+    toast(`Enter the SSH username for ${host.host}.`);
+  } else {
+    usernameInput.focus();
+    usernameInput.select();
+  }
+}
+
+function showAddModal({ resetForm = false } = {}) {
+  if (resetForm) {
+    resetAddForm();
+  }
+  if (!document.getElementById('discovered-list').children.length) {
+    renderDiscoveredHosts(discoveredHosts);
+  }
+  updateSelectedDeviceBanner(discoveredHosts.find((host) => getDiscoveryKey(host) === selectedDiscoveryKey));
+  document.getElementById('addModal').classList.add('active');
+}
+
+function showTunnelModal(hostname) {
+  document.getElementById('tunnelHostname').value = hostname;
+  document.getElementById('tunnelPort').value = '';
+  document.getElementById('tunnelModal').classList.add('active');
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('active');
+  if (id === 'addModal') {
+    resetAddForm();
+  }
+}
+
+async function addDevice(expectedHostFingerprint) {
+  const hostInput = document.getElementById('sshHost');
+  const usernameInput = document.getElementById('sshUsername');
+  const portInput = document.getElementById('sshPort');
+  const hostname = hostInput.value.trim().replace(/\.+$/, '');
+  const username = usernameInput.value.trim();
+  const port = portInput.value.trim();
+  const password = document.getElementById('sshPassword').value;
+  if (!hostname) {
+    hostInput.focus();
+    return toast('Enter an SSH host or pick a discovered device.', true);
+  }
+  if (!username) {
+    usernameInput.focus();
+    return toast('Enter the SSH username for this device.', true);
+  }
+  if (port && (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)) {
+    portInput.focus();
+    return toast('Enter a valid SSH port between 1 and 65535.', true);
+  }
+
+  const sshUrl = `ssh://${username}@${hostname}${port ? `:${port}` : ''}`;
+
+  try {
+    await api('/api/devices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sshUrl, password: password || undefined, expectedHostFingerprint }),
+    });
+    closeModal('addModal');
+    toast('Device added');
+    loadDevices();
+  } catch (err) {
+    if (confirmHostKeyTrust(err, (fingerprint) => addDevice(fingerprint))) return;
+    toast(err.message, true);
+  }
+}
+
+async function connectDevice(hostname, expectedHostFingerprint) {
+  try {
+    await api(`/api/devices/${hostname}/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedHostFingerprint }),
+    });
+    toast(`Connected to ${hostname}`);
+    loadDevices();
+  } catch (err) {
+    if (confirmHostKeyTrust(err, (fingerprint) => connectDevice(hostname, fingerprint))) return;
+    toast(err.message, true);
+  }
+}
+
+async function openDeviceTerminal(hostname) {
+  try {
+    await api(`/api/devices/${hostname}/apps/terminal`, { method: 'POST' });
+    toast(`Opening terminal for ${hostname}`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function openDeviceDashboard(hostname) {
+  try {
+    toast(`Launching Open Dashboard for ${hostname}...`);
+    await api(`/api/devices/${hostname}/apps/dashboard`, { method: 'POST' });
+    toast(`Open Dashboard launched for ${hostname}`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function disconnectDevice(hostname) {
+  try {
+    await api(`/api/devices/${hostname}/disconnect`, { method: 'POST' });
+    toast(`Disconnected from ${hostname}`);
+    loadDevices();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function addTunnel() {
+  const hostname = document.getElementById('tunnelHostname').value;
+  const port = document.getElementById('tunnelPort').value;
+  if (!port) return toast('Enter a port number', true);
+  try {
+    const result = await api(`/api/devices/${hostname}/tunnels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ port }) });
+    closeModal('tunnelModal');
+    toast(`Tunnel opened: localhost:${result.localPort} → ${hostname}:${port}`);
+    loadDevices();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function closeTunnel(hostname, port) {
+  try {
+    await api(`/api/devices/${hostname}/tunnels/${port}`, { method: 'DELETE' });
+    toast('Tunnel closed');
+    loadDevices();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function removeDevice(hostname) {
+  if (!confirm(`Delete device '${hostname}'?`)) return;
+  try {
+    await api(`/api/devices/${hostname}`, { method: 'DELETE' });
+    toast('Device deleted');
+    loadDevices();
+  } catch (err) { toast(err.message, true); }
+}
+
+function wireUiEvents() {
+  document.getElementById('addDeviceButton').addEventListener('click', () => openAddDeviceModal());
+  document.getElementById('cancelAddDeviceButton').addEventListener('click', () => closeModal('addModal'));
+  document.getElementById('confirmAddDeviceButton').addEventListener('click', () => addDevice());
+  document.getElementById('cancelTunnelButton').addEventListener('click', () => closeModal('tunnelModal'));
+  document.getElementById('confirmTunnelButton').addEventListener('click', () => addTunnel());
+}
+
+async function init() {
+  try {
+    API_TOKEN = await readApiToken();
+    wireUiEvents();
+    await loadDevices();
+    // No polling while the window is hidden; refresh as soon as it returns.
+    setInterval(() => {
+      if (!document.hidden) loadDevices();
+    }, 10000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) loadDevices();
+    });
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
