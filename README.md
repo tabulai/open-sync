@@ -13,19 +13,56 @@ Desktop SSH discovery, connection management, and port forwarding.
 
 ## Quick Start
 
-```bash
-npm install
+Install this repo before running the CLI, web UI, tests, or app build:
 
-# CLI
+```bash
+npm ci
+npm test
+```
+
+Use the CLI directly during development:
+
+```bash
 node src/cli/index.js discover          # Find devices on your network
 node src/cli/index.js create ssh://<account>@<host>
 node src/cli/index.js connect hostname
 node src/cli/index.js open hostname 8888
 node src/cli/index.js status hostname
-
-# Web UI
-node src/web/server.js                   # open the printed localhost URL
 ```
+
+Run the web UI or Electron shell locally:
+
+```bash
+npm run web                             # open the printed localhost URL
+npm start                               # launch the Electron app in development
+```
+
+## Build the macOS App
+
+The packaged Electron app bundles a sibling `open-dashboard` project from `../open-dashboard`. First-time builders need that project checked out next to this repo and installed locally:
+
+```bash
+cd ../open-dashboard
+npm ci
+npm run build
+```
+
+Then build Open Sync:
+
+```bash
+cd ../open-sync
+npm ci
+npm run dist:dir
+open "dist/mac-arm64/Open Sync.app"
+```
+
+The local `.app` bundle is written to `dist/mac-arm64/Open Sync.app`.
+
+### Packaging Notes
+
+- Use `npm ci` without `--ignore-scripts` before packaging. Native dependencies used by `ssh2`, including `cpu-features`, may need install-generated build files for Electron rebuilds.
+- If dependencies were previously installed with `--ignore-scripts`, run `npm rebuild cpu-features ssh2` or reinstall with `npm ci` before `npm run dist:dir`.
+- The build config references `build/icon.icns`, but this repo does not currently include that file. Until an icon is added, Electron packaging falls back to the default Electron icon.
 
 ## CLI Commands
 
