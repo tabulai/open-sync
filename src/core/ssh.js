@@ -27,6 +27,9 @@ const pendingConnections = new Map();
 // Active port forwards keyed by "hostname:remotePort"
 const tunnels = new Map();
 
+// Hostnames whose in-flight connect attempt was cancelled by disconnect()
+const cancelledConnects = new Set();
+
 class HostKeyTrustRequiredError extends Error {
   constructor({ hostname, host, port, fingerprint }) {
     super(`SSH host key for ${host}:${port} is not trusted. Verify fingerprint ${fingerprint}, then retry with that fingerprint to trust this device.`);
@@ -451,6 +454,11 @@ function connectForCreateDevice({ targetHost, port, username, password, hostKeyV
       conn.end();
       finish(reject, hostKeyVerifier.getError() || err);
     });
+    conn.on('close', () => {
+      // ssh2 can close without emitting 'error'; settle so createDevice
+      // cannot hang. No-op when 'ready' or 'error' already settled.
+      finish(reject, hostKeyVerifier.getError() || new Error(`Connection to ${targetHost}:${port} closed unexpectedly during device setup.`));
+    });
     conn.connect(connectOpts);
   });
 }
@@ -502,6 +510,7 @@ function connect(hostname, options = {}) {
 
   const pending = connectOnce(hostname, options).finally(() => {
     pendingConnections.delete(hostname);
+    cancelledConnects.delete(hostname);
   });
   pendingConnections.set(hostname, pending);
   return pending;
@@ -531,6 +540,11 @@ function connectOnce(hostname, options = {}) {
     const conn = new (getSsh2().Client)();
     conn.on('ready', () => {
       try {
+        if (cancelledConnects.delete(hostname)) {
+          conn.end();
+          return reject(new Error(`Connection to '${hostname}' was cancelled by disconnect.`));
+        }
+
         const updated = updateDeviceConnectionState(hostname, (currentDevice) => {
           currentDevice.status = 'connected';
           delete currentDevice.error;
@@ -573,16 +587,41 @@ function connectOnce(hostname, options = {}) {
 
     conn.on('close', () => {
       connections.delete(hostname);
+      // Tear down tunnels bound to this (now dead) connection, mirroring
+      // disconnect(); otherwise their net servers keep listening and the
+      // next local connection would call forwardOut on a dead client.
+      for (const [key, info] of tunnels) {
+        if (key.startsWith(`${hostname}:`)) {
+          info.server.close();
+          tunnels.delete(key);
+        }
+      }
       try {
         const s = loadState();
         const d = getDevice(s, hostname);
-        if (d && d.status !== 'disconnected') {
+        let dirty = false;
+        if (s.openPorts?.[hostname]) {
+          delete s.openPorts[hostname];
+          dirty = true;
+        }
+        // Only a healthy connection transitions to 'disconnected' here. A
+        // failed one has already recorded status 'error', which getStatus
+        // and the UI surface and disconnect() clears explicitly.
+        if (d && d.status === 'connected') {
           d.status = 'disconnected';
           upsertDevice(s, d);
-          saveState(s);
+          dirty = true;
         }
+        if (dirty) saveState(s);
       } catch {
         // State file may be mid-write from another operation; skip update
+      }
+      if (!established) {
+        // ssh2 can close without emitting 'error' (e.g. the remote end
+        // drops the socket mid-handshake). Settle the promise so the
+        // pending-connection entry for this host cannot wedge forever;
+        // this is a no-op if the error path already rejected.
+        reject(hostKeyVerifier.getError() || new Error(`Connection to '${hostname}' closed before it became ready.`));
       }
       if (established && typeof options.onClose === 'function') {
         options.onClose(postEstablishError);
@@ -607,6 +646,11 @@ function connectOnce(hostname, options = {}) {
 }
 
 function disconnect(hostname) {
+  // An in-flight connect would otherwise re-register the connection right
+  // after this disconnect; flag it so its 'ready' handler aborts instead.
+  if (pendingConnections.has(hostname)) {
+    cancelledConnects.add(hostname);
+  }
   const conn = connections.get(hostname);
   if (conn) {
     // Close all tunnels for this host
@@ -671,16 +715,35 @@ function openTunnel(hostname, remotePort) {
     }
 
     const server = createServer((socket) => {
-      conn.forwardOut('127.0.0.1', 0, '127.0.0.1', validatedRemotePort, (err, stream) => {
-        if (err) { socket.end(); return; }
-        socket.pipe(stream);
-        stream.pipe(socket);
-        socket.on('error', () => stream.end());
-        stream.on('error', () => socket.end());
-      });
+      // A client can reset the socket before forwardOut's callback runs;
+      // without a listener that 'error' event would crash the process.
+      socket.on('error', () => {});
+      try {
+        conn.forwardOut('127.0.0.1', 0, '127.0.0.1', validatedRemotePort, (err, stream) => {
+          if (err) { socket.end(); return; }
+          socket.pipe(stream);
+          stream.pipe(socket);
+          socket.on('error', () => stream.end());
+          stream.on('error', () => socket.end());
+        });
+      } catch {
+        // forwardOut throws synchronously if the SSH connection is gone; a
+        // throw here would otherwise be an uncaught exception that kills the
+        // whole process.
+        socket.destroy();
+      }
     });
 
     server.listen(0, '127.0.0.1', () => {
+      // Two overlapping openTunnel calls can both pass the tunnels.has
+      // check above; the first listen callback to run wins and later ones
+      // close their redundant server instead of leaking it untracked.
+      const existing = tunnels.get(key);
+      if (existing) {
+        server.close();
+        return resolve({ status: 'OPENED', remotePort: validatedRemotePort, localPort: existing.localPort });
+      }
+
       const localPort = server.address().port;
       tunnels.set(key, { server, localPort });
 

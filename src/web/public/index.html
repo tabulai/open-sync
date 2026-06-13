@@ -499,12 +499,13 @@ async function fetchAndRenderDevices() {
   // Bounded so a stalled request (e.g. after sleep/wake) cannot pin the
   // in-flight guard above and block every later refresh.
   const devices = await api('/api/devices', { signal: AbortSignal.timeout(8000) });
-  const entries = [];
-  for (const d of devices) {
+  // Status requests are independent local reads; fetch them in parallel so
+  // a stalled request costs at most one 8s timeout instead of one per device.
+  const entries = await Promise.all(devices.map(async (d) => {
     let status;
     try { status = await api(`/api/devices/${d.hostname}/status`, { signal: AbortSignal.timeout(8000) }); } catch { status = { status: 'DISCONNECTED', ports: {} }; }
-    entries.push({ device: d, status });
-  }
+    return { device: d, status };
+  }));
 
   // Steady-state polls usually return identical data; skip the DOM teardown
   // (and its flicker, focus loss, and listener churn) when nothing changed.
