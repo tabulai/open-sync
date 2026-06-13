@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, openSync } from 'fs';
+import { accessSync, closeSync, constants, existsSync, openSync } from 'fs';
 import { spawn } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -147,6 +147,12 @@ function spawnDetached(command, args, options = {}) {
     stdio: 'ignore',
     ...options,
   });
+  // Spawn failures (ENOENT, EACCES, EMFILE) surface as an async 'error'
+  // event; without a listener that becomes an uncaught exception that
+  // kills the whole process.
+  child.once('error', (err) => {
+    console.error(`Failed to launch ${command}: ${err.message}`);
+  });
   child.unref();
 }
 
@@ -206,11 +212,17 @@ async function ensureDashboardServerRunning() {
   }
 
   const logFd = openSync(OPEN_DASHBOARD_LOG_PATH, 'a');
-  spawnDetached(process.execPath, ['server.js'], {
-    cwd: OPEN_DASHBOARD_DIR,
-    stdio: ['ignore', logFd, logFd],
-    env: dashboardServerEnv(),
-  });
+  try {
+    spawnDetached(process.execPath, ['server.js'], {
+      cwd: OPEN_DASHBOARD_DIR,
+      stdio: ['ignore', logFd, logFd],
+      env: dashboardServerEnv(),
+    });
+  } finally {
+    // The child holds its own duplicate of the descriptor; keeping the
+    // parent's copy open would leak one fd per start attempt.
+    closeSync(logFd);
+  }
 
   const ready = await waitFor(() => isDashboardServerHealthy());
   if (!ready) {
@@ -248,7 +260,7 @@ async function configureDashboardForDevice(device) {
     throw err;
   }
   if (!response.ok) {
-    throw new Error(data.error || 'Failed to configure Open Dashboard.');
+    throw new Error(data?.error || 'Failed to configure Open Dashboard.');
   }
   return data;
 }

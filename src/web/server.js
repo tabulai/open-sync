@@ -16,8 +16,13 @@ const INDEX_PATH = join(PUBLIC_DIR, 'index.html');
 const app = express();
 app.use(enforceLoopbackHost);
 app.use(securityHeaders);
+// The template never changes while the server runs; only the CSP nonce is
+// per-request. Lazy (rather than import-time) so a missing index.html stays
+// a per-request 500 instead of a startup crash.
+let indexTemplate;
 app.get(['/', '/index.html'], (req, res) => {
-  const html = readFileSync(INDEX_PATH, 'utf-8').replaceAll('{{cspNonce}}', res.locals.cspNonce);
+  indexTemplate ??= readFileSync(INDEX_PATH, 'utf-8');
+  const html = indexTemplate.replaceAll('{{cspNonce}}', res.locals.cspNonce);
   res.setHeader('Cache-Control', 'no-store');
   res.type('html').send(html);
 });
@@ -198,8 +203,13 @@ function startServer(port) {
   const p = resolveListenPort(port);
   const apiToken = createApiToken();
   app.locals.apiToken = apiToken;
-  return new Promise((resolve) => {
-    const server = app.listen(p, '127.0.0.1', () => {
+  return new Promise((resolve, reject) => {
+    // Express 5 also invokes this callback on listen failure (it attaches
+    // the once-wrapped callback to the server 'error' event), in which case
+    // err is set and server.address() is null. Without handling it, a busy
+    // default port crashed the process with a TypeError.
+    const server = app.listen(p, '127.0.0.1', (err) => {
+      if (err) return reject(err);
       const addr = server.address();
       server.openSyncApiToken = apiToken;
       server.openSyncUrl = `http://localhost:${addr.port}/`;
@@ -336,7 +346,10 @@ function sendApiError(res, err, fallbackStatus) {
 
 // Auto-start when run directly (not imported for tests)
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/'))) {
-  startServer();
+  startServer().catch((err) => {
+    console.error(`Failed to start open-sync web UI: ${err.message}`);
+    process.exitCode = 1;
+  });
 }
 
 export { app, startServer };

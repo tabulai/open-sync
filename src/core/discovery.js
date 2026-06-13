@@ -30,7 +30,10 @@ function discoverAdvertisedHosts(timeoutMs) {
     let browser;
 
     try {
-      bonjour = new Bonjour();
+      // Without an error callback, bonjour-service rethrows async mDNS
+      // socket errors (e.g. EADDRINUSE on 5353), crashing the process.
+      // Treat them as "no mDNS results" — the TCP probe still runs.
+      bonjour = new Bonjour(undefined, () => {});
       browser = bonjour.find({ type: 'ssh' }, (service) => {
         if (hosts.length >= MAX_MDNS_DISCOVERY_HOSTS) return;
         const host = normalizeAdvertisedHost(service);
