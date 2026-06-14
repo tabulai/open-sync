@@ -1,0 +1,46 @@
+name: macOS unsigned build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    name: Build unsigned macOS app
+    runs-on: macos-15
+
+    steps:
+      - name: Check out Open Sync
+        uses: actions/checkout@v4
+        with:
+          path: open-sync
+
+      - name: Check out Open Dashboard
+        uses: actions/checkout@v4
+        with:
+          repository: tabulai/open-dashboard
+          path: open-dashboard
+          token: ${{ secrets.OPEN_DASHBOARD_CHECKOUT_TOKEN || github.token }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: open-sync/.nvmrc
+          cache: npm
+          cache-dependency-path: |
+            open-sync/package-lock.json
+            open-dashboard/package-lock.json
+
+      - name: Build unsigned app artifact
+        working-directory: open-sync
+        run: npm run mac:build
+
+      - name: Upload unsigned app zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-sync-mac-arm64-unsigned
+          path: open-sync/dist/Open-Sync-0.1.0-mac-arm64-unsigned.zip
+          if-no-files-found: error

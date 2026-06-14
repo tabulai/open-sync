@@ -16,6 +16,7 @@ Desktop SSH discovery, connection management, and port forwarding.
 Install this repo before running the CLI, web UI, tests, or app build:
 
 ```bash
+nvm use
 npm ci
 npm test
 ```
@@ -39,29 +40,58 @@ npm start                               # launch the Electron app in development
 
 ## Build the macOS App
 
-The packaged Electron app bundles a sibling `open-dashboard` project from `../open-dashboard`. First-time builders need that project checked out next to this repo and installed locally:
+The packaged Electron app bundles `open-dashboard`. The build scripts use `../open-dashboard` when it exists; otherwise they clone `open-dashboard` into a temporary build workspace.
 
 ```bash
-cd ../open-dashboard
-npm ci
-npm run build
+git clone git@github.com-tabulai:tabulai/open-dashboard.git ../open-dashboard
 ```
 
-Then build Open Sync:
+Then build Open Sync in a temporary workspace:
 
 ```bash
-cd ../open-sync
-npm ci
-npm run dist:dir
+nvm use
+npm run mac:build
 open "dist/mac-arm64/Open Sync.app"
 ```
 
-The local `.app` bundle is written to `dist/mac-arm64/Open Sync.app`.
+The local unsigned `.app` bundle is written to `dist/mac-arm64/Open Sync.app`, and an unsigned zip artifact is written to `dist/Open-Sync-0.1.0-mac-arm64-unsigned.zip`.
+
+### Clickable macOS Installer
+
+For a one-click local build and install, double-click:
+
+```text
+installers/Open Sync Installer.command
+```
+
+The installer builds in a temporary workspace, so failed or interrupted runs do not corrupt this checkout's `node_modules`. It builds `../open-dashboard`, builds the Open Sync Electron app, publishes unsigned local artifacts into `dist/`, installs `Open Sync.app` into `/Applications` when possible, and opens it. If `/Applications` is not writable, it installs to `~/Applications/Open Sync.app`.
+
+You can run the same flow from Terminal with:
+
+```bash
+npm run mac:install
+```
+
+Useful installer options and environment variables:
+
+```bash
+npm run mac:build                         # build unsigned artifacts only
+bash scripts/build-and-install-macos.sh --no-open
+OPEN_DASHBOARD_DIR=/path/to/open-dashboard npm run mac:install
+OPEN_DASHBOARD_GIT_URL=git@github.com-tabulai:tabulai/open-dashboard.git npm run mac:install
+OPEN_SYNC_APP_PATH="$HOME/Applications/Open Sync.app" npm run mac:install
+OPEN_SYNC_KEEP_BUILD_DIR=1 npm run mac:install
+```
+
+### Unsigned CI Builds
+
+The `.github/workflows/macos-unsigned-build.yml` workflow checks out `open-sync` and `open-dashboard` side by side, uses the Node version pinned in `.nvmrc`, runs `npm run mac:build`, and uploads the unsigned zip artifact. This is for internal developer validation only; it is not a public macOS distribution build.
 
 ### Packaging Notes
 
-- Use `npm ci` without `--ignore-scripts` before packaging. Native dependencies used by `ssh2`, including `cpu-features`, may need install-generated build files for Electron rebuilds.
-- If dependencies were previously installed with `--ignore-scripts`, run `npm rebuild cpu-features ssh2` or reinstall with `npm ci` before `npm run dist:dir`.
+- The local build scripts intentionally skip signing by setting Electron Builder's macOS identity to `null`. The resulting app can be useful for development, but it is not signed, notarized, or distribution-ready.
+- The build scripts install dependencies inside a temporary workspace. You do not need to run `npm ci` in the live checkout before running `npm run mac:build` or `npm run mac:install`.
+- Native dependencies used by `ssh2` and `cpu-features` are rebuilt during packaging. Long quiet periods in this phase usually mean Electron Rebuild is compiling native code.
 - The build config references `build/icon.icns`, but this repo does not currently include that file. Until an icon is added, Electron packaging falls back to the default Electron icon.
 
 ## CLI Commands
