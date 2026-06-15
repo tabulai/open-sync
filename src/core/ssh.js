@@ -24,6 +24,8 @@ const connections = new Map();
 // In-flight SSH connection attempts keyed by hostname
 const pendingConnections = new Map();
 
+const SSH_READY_TIMEOUT_MS = 10000;
+
 // Active port forwards keyed by "hostname:remotePort"
 const tunnels = new Map();
 
@@ -216,6 +218,15 @@ function getKnownHost(state, hostname, port) {
   return state.knownHosts?.[hostKeyStateKey(hostname, port)];
 }
 
+function findKnownHostByPublicKey(state, details) {
+  if (!details?.publicKey) return null;
+  return Object.values(state.knownHosts || {}).find((entry) => (
+    entry?.publicKey === details.publicKey
+    && entry?.keyType === details.keyType
+    && normalizeHostFingerprint(entry?.fingerprint) === normalizeHostFingerprint(details.fingerprint)
+  )) || null;
+}
+
 function rememberTrustedHostKey(state, hostKey) {
   if (!hostKey) return;
   state.knownHosts ||= {};
@@ -265,6 +276,12 @@ function createHostKeyVerifier({ hostname, host, port, expectedHostFingerprint }
           expectedFingerprint: known.fingerprint,
         });
         return false;
+      }
+
+      const knownByKey = findKnownHostByPublicKey(state, { ...details, fingerprint });
+      if (knownByKey) {
+        trustedHostKey = { ...details, fingerprint, hostname, host, port };
+        return true;
       }
 
       if (!expectedFingerprint) {
@@ -431,6 +448,7 @@ function connectForCreateDevice({ targetHost, port, username, password, hostKeyV
       username,
       tryKeyboard: Boolean(password),
       hostVerifier: hostKeyVerifier.hostVerifier,
+      readyTimeout: SSH_READY_TIMEOUT_MS,
     };
     let settled = false;
 
@@ -641,6 +659,7 @@ function connectOnce(hostname, options = {}) {
       username: device.username,
       privateKey,
       hostVerifier: hostKeyVerifier.hostVerifier,
+      readyTimeout: SSH_READY_TIMEOUT_MS,
     });
   });
 }
