@@ -58,6 +58,7 @@
   .status { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
   .status.connected { background: #123f24; color: #a8f0be; }
   .status.disconnected { background: #4a2c21; color: #ffb197; }
+  .status.pending { background: #163b46; color: #99e6ff; }
   .status.error { background: #463710; color: #f7d76b; }
   .device-info { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
   .device-error { margin: -2px 0 12px; padding: 8px 10px; border: 1px solid rgba(179, 134, 0, 0.45); border-radius: 6px; background: rgba(179, 134, 0, 0.12); color: #f6d983; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
@@ -226,6 +227,8 @@ let toastTimer;
 let lastDevicesSnapshot = '';
 let devicesLoadInFlight = null;
 let devicesReloadQueued = false;
+let addDeviceInFlight = false;
+const connectingDevices = new Set();
 
 async function readApiToken() {
   const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -515,13 +518,12 @@ async function api(path, opts) {
   return data;
 }
 
-function confirmHostKeyTrust(err, retry) {
-  if (err.code !== 'HOST_KEY_TRUST_REQUIRED' || !err.fingerprint) return false;
+function confirmHostKeyTrust(err) {
+  if (err.code !== 'HOST_KEY_TRUST_REQUIRED' || !err.fingerprint) return '';
   const ok = confirm(
     `Verify this SSH host key fingerprint before continuing:\n\n${err.host || err.hostname}\n${err.fingerprint}\n\nOnly continue if it matches the fingerprint shown on that device.`
   );
-  if (ok) retry(err.fingerprint);
-  return true;
+  return ok ? err.fingerprint : '';
 }
 
 // Latest-wins guard: user actions and the poll timer call loadDevices
@@ -558,7 +560,7 @@ async function fetchAndRenderDevices() {
 
   // Steady-state polls usually return identical data; skip the DOM teardown
   // (and its flicker, focus loss, and listener churn) when nothing changed.
-  const snapshot = JSON.stringify(entries);
+  const snapshot = JSON.stringify({ entries, connecting: Array.from(connectingDevices).sort() });
   if (snapshot === lastDevicesSnapshot) return;
   lastDevicesSnapshot = snapshot;
   renderDevices(entries);
@@ -582,8 +584,9 @@ function renderDevices(entries) {
 }
 
 function buildDeviceCard(d, status) {
-  const statusClass = status.status === 'RUNNING' ? 'connected' : (status.status === 'ERROR' ? 'error' : 'disconnected');
-  const statusLabel = status.status === 'RUNNING' ? 'Connected' : (status.status === 'ERROR' ? 'Error' : 'Disconnected');
+  const isConnecting = connectingDevices.has(d.hostname);
+  const statusClass = isConnecting ? 'pending' : (status.status === 'RUNNING' ? 'connected' : (status.status === 'ERROR' ? 'error' : 'disconnected'));
+  const statusLabel = isConnecting ? 'Connecting' : (status.status === 'RUNNING' ? 'Connected' : (status.status === 'ERROR' ? 'Error' : 'Disconnected'));
   const card = createElement('div', { className: 'card' });
   const header = createElement('div', { className: 'card-header' });
   const title = createElement('h3', { text: d.hostname });
@@ -617,7 +620,13 @@ function buildDeviceCard(d, status) {
 
   const actions = createElement('div', { className: 'device-actions' });
   if (status.status !== 'RUNNING') {
-    actions.append(createActionButton('Connect', { className: 'success', ariaLabel: `Connect to ${d.hostname}`, onClick: () => connectDevice(d.hostname) }));
+    const connectButton = createActionButton(isConnecting ? 'Connecting...' : 'Connect', {
+      className: 'success',
+      ariaLabel: `Connect to ${d.hostname}`,
+      onClick: () => connectDevice(d.hostname),
+    });
+    connectButton.disabled = isConnecting;
+    actions.append(connectButton);
   } else {
     actions.append(
       createActionButton('Disconnect', { ariaLabel: `Disconnect from ${d.hostname}`, onClick: () => disconnectDevice(d.hostname) }),
@@ -705,9 +714,11 @@ function closeModal(id) {
 }
 
 async function addDevice(expectedHostFingerprint) {
+  if (addDeviceInFlight) return;
   const hostInput = document.getElementById('sshHost');
   const usernameInput = document.getElementById('sshUsername');
   const portInput = document.getElementById('sshPort');
+  const addButton = document.getElementById('confirmAddDeviceButton');
   const hostname = hostInput.value.trim().replace(/\.+$/, '');
   const username = usernameInput.value.trim();
   const port = portInput.value.trim();
@@ -726,34 +737,67 @@ async function addDevice(expectedHostFingerprint) {
   }
 
   const sshUrl = `ssh://${username}@${hostname}${port ? `:${port}` : ''}`;
+  let hostFingerprint = expectedHostFingerprint;
+  addDeviceInFlight = true;
+  addButton.disabled = true;
+  addButton.textContent = 'Adding...';
+  toast(`Adding ${hostname}...`);
 
   try {
-    await api('/api/devices', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sshUrl, password: password || undefined, expectedHostFingerprint }),
-    });
+    while (true) {
+      try {
+        await api('/api/devices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sshUrl, password: password || undefined, expectedHostFingerprint: hostFingerprint }),
+        });
+        break;
+      } catch (err) {
+        const confirmedFingerprint = confirmHostKeyTrust(err);
+        if (!confirmedFingerprint) throw err;
+        hostFingerprint = confirmedFingerprint;
+      }
+    }
     closeModal('addModal');
     toast('Device added');
     loadDevices();
   } catch (err) {
-    if (confirmHostKeyTrust(err, (fingerprint) => addDevice(fingerprint))) return;
     toast(err.message, true);
+  } finally {
+    addDeviceInFlight = false;
+    addButton.disabled = false;
+    addButton.textContent = 'Add';
   }
 }
 
 async function connectDevice(hostname, expectedHostFingerprint) {
+  if (connectingDevices.has(hostname)) return;
+  connectingDevices.add(hostname);
+  loadDevices();
+  let hostFingerprint = expectedHostFingerprint;
   try {
-    await api(`/api/devices/${hostname}/connect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedHostFingerprint }),
-    });
+    toast(`Connecting to ${hostname}...`);
+    while (true) {
+      try {
+        await api(`/api/devices/${hostname}/connect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ expectedHostFingerprint: hostFingerprint }),
+        });
+        break;
+      } catch (err) {
+        const confirmedFingerprint = confirmHostKeyTrust(err);
+        if (!confirmedFingerprint) throw err;
+        hostFingerprint = confirmedFingerprint;
+      }
+    }
     toast(`Connected to ${hostname}`);
     loadDevices();
   } catch (err) {
-    if (confirmHostKeyTrust(err, (fingerprint) => connectDevice(hostname, fingerprint))) return;
     toast(err.message, true);
+  } finally {
+    connectingDevices.delete(hostname);
+    loadDevices();
   }
 }
 

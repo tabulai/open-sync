@@ -353,6 +353,31 @@ describe('ssh', () => {
       assert.equal(confirmed.getTrustedHostKey().fingerprint, fingerprint);
     });
 
+    it('accepts a new hostname when the exact host key is already pinned', () => {
+      const publicKey = testHostPublicKey();
+      const fingerprint = fingerprintForPublicKey(publicKey);
+      const state = loadState();
+      state.knownHosts['192.168.1.104:22'] = {
+        hostname: '192.168.1.104',
+        host: '192.168.1.104',
+        port: 22,
+        fingerprint,
+        keyType: 'ssh-ed25519',
+        publicKey: publicKey.toString('base64'),
+      };
+      saveState(state);
+
+      const verifier = createHostKeyVerifier({
+        hostname: 'Bojans-Mac-mini.local',
+        host: 'Bojans-Mac-mini.local',
+        port: 22,
+      });
+
+      assert.equal(verifier.hostVerifier(publicKey), true);
+      assert.equal(verifier.getTrustedHostKey().hostname, 'Bojans-Mac-mini.local');
+      assert.equal(verifier.getTrustedHostKey().fingerprint, fingerprint);
+    });
+
     it('rejects host key changes for pinned hosts', () => {
       const firstKey = testHostPublicKey();
       const secondKey = testHostPublicKey();
