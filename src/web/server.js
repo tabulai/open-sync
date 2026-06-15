@@ -7,7 +7,7 @@ import { dirname, join } from 'path';
 import { loadState, getDevice } from '../core/state.js';
 import { discover, discoverWithSystemTools } from '../core/discovery.js';
 import { ensureKeyPair, getPublicKey } from '../core/keys.js';
-import { createDevice, connect, disconnect, getStatus, openTunnel, closeTunnel, deleteDevice, getConnections, validatePort } from '../core/ssh.js';
+import { createDevice, connect, disconnect, getStatus, openTunnel, closeTunnel, deleteDevice, getConnections, validatePort, formatErrorMessage } from '../core/ssh.js';
 import { openDashboardForDevice, openTerminalForDevice } from '../core/apps.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -347,7 +347,7 @@ function requireTrustedApiRequest(req, res, next) {
 }
 
 function sendApiError(res, err, fallbackStatus) {
-  const body = { error: err.message };
+  const body = { error: formatErrorMessage(err) };
   if (err.code) body.code = err.code;
   if (err.fingerprint) body.fingerprint = err.fingerprint;
   if (err.host) body.host = err.host;

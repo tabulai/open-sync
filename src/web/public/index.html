@@ -509,9 +509,11 @@ async function api(path, opts) {
     headers.set('X-Open-Sync-Token', API_TOKEN);
   }
   const res = await fetch(API + path, { ...(opts || {}), headers });
-  const data = await res.json();
+  const contentType = res.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await res.json() : {};
   if (!res.ok) {
-    const error = new Error(data.error || 'Request failed');
+    const fallback = `${res.status} ${res.statusText || 'Request failed'}`.trim();
+    const error = new Error(data.error || data.code || fallback);
     Object.assign(error, data);
     throw error;
   }
