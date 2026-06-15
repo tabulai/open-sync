@@ -12,6 +12,7 @@
     "cli": "node src/cli/index.js",
     "web": "node src/web/server.js",
     "test": "node --test test/*.test.js",
+    "mac:icon": "python3 scripts/generate-macos-icon.py",
     "dist": "electron-builder --mac",
     "dist:dir": "electron-builder --mac --dir",
     "mac:build": "bash scripts/build-and-install-macos.sh --build-only",

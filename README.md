@@ -92,7 +92,7 @@ The `.github/workflows/macos-unsigned-build.yml` workflow checks out `open-sync`
 - The local build scripts intentionally skip signing by setting Electron Builder's macOS identity to `null`. The resulting app can be useful for development, but it is not signed, notarized, or distribution-ready.
 - The build scripts install dependencies inside a temporary workspace. You do not need to run `npm ci` in the live checkout before running `npm run mac:build` or `npm run mac:install`.
 - Native dependencies used by `ssh2` and `cpu-features` are rebuilt during packaging. Long quiet periods in this phase usually mean Electron Rebuild is compiling native code.
-- The build config references `build/icon.icns`, but this repo does not currently include that file. Until an icon is added, Electron packaging falls back to the default Electron icon.
+- The custom app icon is generated from `build/icon.svg` with `npm run mac:icon`, which writes `build/icon.icns` for Electron Builder.
 
 ## CLI Commands
 

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 
 describe('macOS packaging', () => {
   it('declares local network permissions required for SSH discovery', () => {
@@ -19,5 +19,14 @@ describe('macOS packaging', () => {
 
     assert.match(installer, /codesign --force --deep --sign -/);
     assert.match(installer, /codesign --verify --deep --strict/);
+  });
+
+  it('ships a custom macOS app icon instead of relying on Electron defaults', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const iconPath = new URL('../build/icon.icns', import.meta.url);
+
+    assert.equal(pkg.build?.mac?.icon, 'build/icon.icns');
+    assert.equal(existsSync(iconPath), true);
+    assert.ok(statSync(iconPath).size > 1024);
   });
 });

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Open Sync app icon</title>
+  <desc id="desc">Two connected network endpoints with opposing sync arrows on a dark rounded-square field.</desc>
+  <defs>
+    <linearGradient id="bg" x1="148" y1="118" x2="876" y2="906" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b3145"/>
+      <stop offset="0.56" stop-color="#111c2c"/>
+      <stop offset="1" stop-color="#07111d"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="296" y1="256" x2="744" y2="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b8fff1"/>
+      <stop offset="1" stop-color="#5ce3d4"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="296" y1="584" x2="744" y2="776" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d6e5ff"/>
+      <stop offset="1" stop-color="#8eb4ff"/>
+    </linearGradient>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="22" stdDeviation="22" flood-color="#000000" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#bg)"/>
+  <g filter="url(#soft-shadow)">
+    <path d="M310 348 C411 256 568 275 684 386" fill="none" stroke="url(#cyan)" stroke-width="54" stroke-linecap="round"/>
+    <path d="M714 676 C613 768 456 749 340 638" fill="none" stroke="url(#blue)" stroke-width="54" stroke-linecap="round"/>
+    <path d="M724 430 648 405 707 354Z" fill="#5ce3d4"/>
+    <path d="M300 594 376 619 317 670Z" fill="#d6e5ff"/>
+    <circle cx="310" cy="348" r="62" fill="#0d1826" stroke="#b8fff1" stroke-width="12"/>
+    <circle cx="714" cy="676" r="62" fill="#0d1826" stroke="#8eb4ff" stroke-width="12"/>
+    <circle cx="310" cy="348" r="18" fill="#b8fff1"/>
+    <circle cx="714" cy="676" r="18" fill="#8eb4ff"/>
+  </g>
+</svg>
