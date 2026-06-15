@@ -1,7 +1,9 @@
 import { createRequire } from 'module';
+import { spawn } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { createServer } from 'net';
 import { readFileSync } from 'fs';
+import { Duplex } from 'stream';
 import { SSH_KEY_PATH, SSH_CONFIG_PATH, SSH_KNOWN_HOSTS_PATH, ensureConfigDir } from './paths.js';
 import { loadState, saveState, getDevice, upsertDevice, removeDevice } from './state.js';
 import { ensureKeyPair } from './keys.js';
@@ -25,6 +27,8 @@ const connections = new Map();
 const pendingConnections = new Map();
 
 const SSH_READY_TIMEOUT_MS = 10000;
+const IPV4_RETRY_ERROR_CODES = new Set(['EHOSTUNREACH', 'ENETUNREACH']);
+const NC_CONNECT_TIMEOUT_SEC = '10';
 
 // Active port forwards keyed by "hostname:remotePort"
 const tunnels = new Map();
@@ -107,6 +111,103 @@ function buildKeyboardInteractiveResponses(prompts = [], password = '') {
     return [];
   }
   return [password];
+}
+
+function shouldRetryWithIPv4(err, targetHost, forceIPv4 = false) {
+  return !forceIPv4
+    && typeof targetHost === 'string'
+    && targetHost.toLowerCase().endsWith('.local')
+    && IPV4_RETRY_ERROR_CODES.has(err?.code);
+}
+
+function formatErrorMessage(err, fallback = 'Request failed') {
+  return String(err?.message || '').trim() || err?.code || fallback;
+}
+
+function shouldUseSystemSshTransport() {
+  // Finder-launched packaged Electron apps on macOS can fail direct Node
+  // local-network sockets with EHOSTUNREACH while system tools work. Discovery
+  // already uses dns-sd/nc in this environment; SSH uses nc as a raw transport
+  // for the same reason.
+  return process.platform === 'darwin'
+    && Boolean(process.versions.electron)
+    && process.defaultApp !== true;
+}
+
+class ChildProcessSocket extends Duplex {
+  constructor(child) {
+    super();
+    this.child = child;
+    this.stderr = child.stderr;
+
+    child.stdout.on('data', (chunk) => {
+      if (!this.push(chunk)) {
+        child.stdout.pause();
+      }
+    });
+    child.stdout.on('end', () => {
+      this.push(null);
+    });
+    child.once('error', (err) => {
+      this.destroy(err);
+    });
+    child.once('close', () => {
+      if (!this.destroyed) {
+        this.push(null);
+      }
+    });
+    child.stdin.once('error', (err) => {
+      this.destroy(err);
+    });
+  }
+
+  _read() {
+    this.child.stdout.resume();
+  }
+
+  _write(chunk, encoding, callback) {
+    if (!this.child.stdin.writable) {
+      callback(new Error('SSH transport closed.'));
+      return;
+    }
+    this.child.stdin.write(chunk, encoding, callback);
+  }
+
+  _final(callback) {
+    this.child.stdin.end(callback);
+  }
+
+  _destroy(err, callback) {
+    if (!this.child.killed) {
+      this.child.kill();
+    }
+    callback(err);
+  }
+
+  setTimeout() {
+    return this;
+  }
+
+  setNoDelay() {
+    return this;
+  }
+}
+
+function createSystemSshSocket(host, port) {
+  const child = spawn('/usr/bin/nc', ['-G', NC_CONNECT_TIMEOUT_SEC, host, String(port)], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  return new ChildProcessSocket(child);
+}
+
+function applySshTransport(connectOpts, { host, port }) {
+  if (shouldUseSystemSshTransport()) {
+    connectOpts.sock = createSystemSshSocket(host, port);
+    delete connectOpts.host;
+    delete connectOpts.port;
+    delete connectOpts.forceIPv4;
+  }
+  return connectOpts;
 }
 
 // The remote host controls how much it writes; cap what we keep so a
@@ -404,25 +505,52 @@ async function createDevice(sshUrl, password, options = {}) {
         username,
         password: authAttempt.password,
         hostKeyVerifier,
+        forceIPv4: false,
       });
 
       try {
-        // If password auth was needed, install the public key before persisting the device.
-        if (authAttempt.method === 'password') {
-          await execSshCommand(conn, buildInstallPublicKeyCommand(keys.publicKey));
-        }
-
-        let homeDirectory = '';
-        try {
-          homeDirectory = await readRemoteHomeDirectory(conn);
-        } catch {
-          // Fall back to the historical Linux-style default below.
-        }
-        return persistCreatedDevice({ hostname, username, port, homeDirectory, hostKeyVerifier });
+        return await finishCreateDeviceConnection({
+          conn,
+          authAttempt,
+          publicKey: keys.publicKey,
+          hostname,
+          username,
+          port,
+          hostKeyVerifier,
+        });
       } finally {
         conn.end();
       }
     } catch (err) {
+      if (shouldRetryWithIPv4(err, targetHost)) {
+        try {
+          conn = await connectForCreateDevice({
+            targetHost,
+            port,
+            username,
+            password: authAttempt.password,
+            hostKeyVerifier,
+            forceIPv4: true,
+          });
+
+          try {
+            return await finishCreateDeviceConnection({
+              conn,
+              authAttempt,
+              publicKey: keys.publicKey,
+              hostname,
+              username,
+              port,
+              hostKeyVerifier,
+            });
+          } finally {
+            conn.end();
+          }
+        } catch (retryErr) {
+          err = retryErr;
+        }
+      }
+
       if (err.code?.startsWith('HOST_KEY_')) {
         throw err;
       }
@@ -439,7 +567,22 @@ async function createDevice(sshUrl, password, options = {}) {
   throw normalizeCreateDeviceError(lastAuthError, authContext);
 }
 
-function connectForCreateDevice({ targetHost, port, username, password, hostKeyVerifier }) {
+async function finishCreateDeviceConnection({ conn, authAttempt, publicKey, hostname, username, port, hostKeyVerifier }) {
+  // If password auth was needed, install the public key before persisting the device.
+  if (authAttempt.method === 'password') {
+    await execSshCommand(conn, buildInstallPublicKeyCommand(publicKey));
+  }
+
+  let homeDirectory = '';
+  try {
+    homeDirectory = await readRemoteHomeDirectory(conn);
+  } catch {
+    // Fall back to the historical Linux-style default below.
+  }
+  return persistCreatedDevice({ hostname, username, port, homeDirectory, hostKeyVerifier });
+}
+
+function connectForCreateDevice({ targetHost, port, username, password, hostKeyVerifier, forceIPv4 = false }) {
   return new Promise((resolve, reject) => {
     const conn = new (getSsh2().Client)();
     const connectOpts = {
@@ -449,6 +592,7 @@ function connectForCreateDevice({ targetHost, port, username, password, hostKeyV
       tryKeyboard: Boolean(password),
       hostVerifier: hostKeyVerifier.hostVerifier,
       readyTimeout: SSH_READY_TIMEOUT_MS,
+      forceIPv4,
     };
     let settled = false;
 
@@ -477,7 +621,7 @@ function connectForCreateDevice({ targetHost, port, username, password, hostKeyV
       // cannot hang. No-op when 'ready' or 'error' already settled.
       finish(reject, hostKeyVerifier.getError() || new Error(`Connection to ${targetHost}:${port} closed unexpectedly during device setup.`));
     });
-    conn.connect(connectOpts);
+    conn.connect(applySshTransport(connectOpts, { host: targetHost, port }));
   });
 }
 
@@ -535,6 +679,18 @@ function connect(hostname, options = {}) {
 }
 
 function connectOnce(hostname, options = {}) {
+  return connectOnceAttempt(hostname, options, false).catch((err) => {
+    const state = loadState();
+    const device = getDevice(state, hostname);
+    const targetHost = device ? resolveTargetHost(device.hostname) : '';
+    if (!shouldRetryWithIPv4(err, targetHost)) {
+      throw err;
+    }
+    return connectOnceAttempt(hostname, options, true);
+  });
+}
+
+function connectOnceAttempt(hostname, options = {}, forceIPv4 = false) {
   return new Promise((resolve, reject) => {
     const initialState = loadState();
     const device = getDevice(initialState, hostname);
@@ -595,7 +751,7 @@ function connectOnce(hostname, options = {}) {
       try {
         updateDeviceConnectionState(hostname, (currentDevice) => {
           currentDevice.status = 'error';
-          currentDevice.error = err.message;
+          currentDevice.error = formatErrorMessage(err, 'Connection failed');
         });
       } catch {
         // Preserve the original connection failure for callers.
@@ -653,14 +809,16 @@ function connectOnce(hostname, options = {}) {
       return reject(new Error('No SSH key found. Run "create" first to set up the device.'));
     }
 
-    conn.connect({
+    const connectOpts = {
       host: targetHost,
       port,
       username: device.username,
       privateKey,
       hostVerifier: hostKeyVerifier.hostVerifier,
       readyTimeout: SSH_READY_TIMEOUT_MS,
-    });
+      forceIPv4,
+    };
+    conn.connect(applySshTransport(connectOpts, { host: targetHost, port }));
   });
 }
 
@@ -836,10 +994,12 @@ export {
   buildCreateDeviceAuthError,
   createHostKeyVerifier,
   execSshCommand,
+  formatErrorMessage,
   getPendingConnections,
   normalizeRemoteDirectory,
   normalizeHostFingerprint,
   parseSSHUrl,
+  shouldRetryWithIPv4,
   updateDeviceConnectionState,
   validatePort,
   createDevice,

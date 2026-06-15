@@ -24,8 +24,10 @@ const {
   createDevice,
   createHostKeyVerifier,
   execSshCommand,
+  formatErrorMessage,
   normalizeHostFingerprint,
   openTunnel,
+  shouldRetryWithIPv4,
   updateDeviceConnectionState,
 } = await import('../src/core/ssh.js');
 const { resolveTargetHost } = await import('../src/core/hosts.js');
@@ -237,6 +239,22 @@ describe('ssh', () => {
         buildCreateDeviceAuthError({ username: 'account-a', targetHost: 'node-243.local', hasPassword: true }),
         'Authentication failed for account-a@node-243.local. Verify the SSH username and password for this device.'
       );
+    });
+  });
+
+  describe('network error handling', () => {
+    it('retries local mDNS host reachability errors over IPv4 once', () => {
+      assert.equal(shouldRetryWithIPv4({ code: 'EHOSTUNREACH' }, 'node.local'), true);
+      assert.equal(shouldRetryWithIPv4({ code: 'ENETUNREACH' }, 'node.local'), true);
+      assert.equal(shouldRetryWithIPv4({ code: 'EHOSTUNREACH' }, 'node.local', true), false);
+      assert.equal(shouldRetryWithIPv4({ code: 'EHOSTUNREACH' }, '192.168.1.20'), false);
+      assert.equal(shouldRetryWithIPv4({ code: 'ECONNREFUSED' }, 'node.local'), false);
+    });
+
+    it('falls back to an error code when ssh2 reports an empty message', () => {
+      assert.equal(formatErrorMessage({ message: '', code: 'EHOSTUNREACH' }), 'EHOSTUNREACH');
+      assert.equal(formatErrorMessage({ message: 'Timed out' }), 'Timed out');
+      assert.equal(formatErrorMessage({}, 'Connection failed'), 'Connection failed');
     });
   });
 
