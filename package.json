@@ -41,7 +41,13 @@
       "category": "public.app-category.developer-tools",
       "target": "dir",
       "identity": null,
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Open Sync scans your local network for SSH-enabled devices and uses Bonjour to discover SSH services.",
+        "NSBonjourServices": [
+          "_ssh._tcp"
+        ]
+      }
     },
     "files": [
       "src/**/*",

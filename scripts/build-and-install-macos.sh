@@ -102,6 +102,7 @@ preflight() {
   require_command ditto
   require_command find
   require_command rsync
+  require_command codesign
   require_command xcode-select
 
   xcode-select -p >/dev/null 2>&1 || fail "Xcode Command Line Tools are required. Run: xcode-select --install"
@@ -225,6 +226,14 @@ find_built_app() {
   find "${STAGED_SYNC_DIR}/dist" -maxdepth 3 -type d -name "${APP_NAME}.app" -print -quit
 }
 
+sign_app() {
+  local app_path="$1"
+
+  step "Ad-hoc signing ${APP_NAME}.app"
+  codesign --force --deep --sign - "${app_path}"
+  codesign --verify --deep --strict --verbose=2 "${app_path}"
+}
+
 publish_artifacts() {
   local built_app="$1"
   local local_app_dir="${SOURCE_REPO_DIR}/dist/mac-arm64"
@@ -235,6 +244,7 @@ publish_artifacts() {
   rm -rf "${local_app}"
   mkdir -p "${local_app_dir}"
   ditto "${built_app}" "${local_app}"
+  sign_app "${local_app}"
 
   rm -f "${zip_path}"
   (

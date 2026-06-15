@@ -7,6 +7,8 @@ import {
   mergeDiscoveredHosts,
   normalizeAdvertisedHost,
   normalizeTimeout,
+  parseDnsSdBrowseInstances,
+  parseDnsSdLookup,
 } from '../src/core/discovery.js';
 import { extractDiscoveryUsername, normalizeHostname } from '../src/core/hosts.js';
 
@@ -117,6 +119,29 @@ describe('discovery', () => {
     assert.equal(normalizeTimeout('1'), 1000);
     assert.equal(normalizeTimeout(0), 3000);
     assert.equal(normalizeTimeout(0.1), 250);
+  });
+
+  it('parses dns-sd SSH browse and lookup output', () => {
+    const browseOutput = `Browsing for _ssh._tcp.local
+Timestamp     A/R    Flags  if Domain               Service Type         Instance Name
+ 6:53:30.888  Add        3  14 local.               _ssh._tcp.           spark-2b43-4 SSH
+ 6:53:30.888  Add        2  14 local.               _ssh._tcp.           BOJAN's Mac Studio (3890)
+`;
+    assert.deepEqual(parseDnsSdBrowseInstances(browseOutput), [
+      'spark-2b43-4 SSH',
+      "BOJAN's Mac Studio (3890)",
+    ]);
+
+    const lookupOutput = `Lookup spark-2b43-4 SSH._ssh._tcp.local
+ 6:53:31.002  spark-2b43-4 SSH._ssh._tcp.local. can be reached at spark-2b43-4.local.:22 (interface 14)
+`;
+    assert.deepEqual(parseDnsSdLookup('spark-2b43-4 SSH', lookupOutput), {
+      name: 'spark-2b43-4 SSH',
+      host: 'spark-2b43-4.local',
+      port: 22,
+      addresses: [],
+      txt: {},
+    });
   });
 
   // One real network scan shared by the live tests; each scan blocks for the

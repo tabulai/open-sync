@@ -5,7 +5,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { loadState, getDevice } from '../core/state.js';
-import { discover } from '../core/discovery.js';
+import { discover, discoverWithSystemTools } from '../core/discovery.js';
 import { ensureKeyPair, getPublicKey } from '../core/keys.js';
 import { createDevice, connect, disconnect, getStatus, openTunnel, closeTunnel, deleteDevice, getConnections, validatePort } from '../core/ssh.js';
 import { openDashboardForDevice, openTerminalForDevice } from '../core/apps.js';
@@ -57,7 +57,7 @@ app.get('/api/discover', async (req, res) => {
     const requested = parseInt(req.query.timeout || '3', 10);
     const timeout = Math.min(Math.max(Number.isInteger(requested) ? requested : 3, 1), 10);
     if (!inflightDiscovery) {
-      inflightDiscovery = discover(timeout).finally(() => { inflightDiscovery = null; });
+      inflightDiscovery = runDiscovery(timeout).finally(() => { inflightDiscovery = null; });
     }
     const hosts = await inflightDiscovery;
     res.json(hosts);
@@ -65,6 +65,19 @@ app.get('/api/discover', async (req, res) => {
     res.status(500).json({ error: String(err.message || 'Discovery failed.') });
   }
 });
+
+function shouldUseSystemDiscovery() {
+  // Finder-launched Electron apps on macOS can see EHOSTUNREACH for RFC1918
+  // Node sockets even when the same binary works from Terminal. System
+  // discovery tools keep the packaged app behavior aligned with the CLI.
+  return process.platform === 'darwin'
+    && Boolean(process.versions.electron)
+    && process.defaultApp !== true;
+}
+
+function runDiscovery(timeout) {
+  return shouldUseSystemDiscovery() ? discoverWithSystemTools(timeout) : discover(timeout);
+}
 
 // Create device
 app.post('/api/devices', async (req, res) => {

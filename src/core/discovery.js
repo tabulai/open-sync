@@ -1,4 +1,5 @@
 import { Bonjour } from 'bonjour-service';
+import { spawn } from 'node:child_process';
 import { Socket } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { extractDiscoveryUsername, normalizeHostname } from './hosts.js';
@@ -12,12 +13,23 @@ const MAX_DISCOVERY_ADDRESSES = 16;
 const MAX_DISCOVERY_TXT_KEYS = 16;
 const MIN_PROBE_TIMEOUT_MS = 75;
 const MAX_PROBE_TIMEOUT_MS = 400;
+const DNS_SD_RESOLVE_CONCURRENCY = 16;
 
 async function discover(timeoutSec = 3, iface) {
   const timeoutMs = normalizeTimeout(timeoutSec);
   const [advertisedHosts, probedHosts] = await Promise.all([
     discoverAdvertisedHosts(timeoutMs),
     discoverOpenSshPorts(timeoutMs, iface),
+  ]);
+
+  return mergeDiscoveredHosts([...advertisedHosts, ...probedHosts]);
+}
+
+async function discoverWithSystemTools(timeoutSec = 3, iface) {
+  const timeoutMs = normalizeTimeout(timeoutSec);
+  const [advertisedHosts, probedHosts] = await Promise.all([
+    discoverAdvertisedHostsWithDnsSd(timeoutMs),
+    discoverOpenSshPortsWithNc(timeoutMs, iface),
   ]);
 
   return mergeDiscoveredHosts([...advertisedHosts, ...probedHosts]);
@@ -126,6 +138,122 @@ async function discoverOpenSshPorts(timeoutMs, iface) {
     suggestedUsername: '',
     source: 'tcp',
   }));
+}
+
+async function discoverAdvertisedHostsWithDnsSd(timeoutMs) {
+  const browse = await runCommand('/usr/bin/dns-sd', ['-B', '_ssh._tcp', 'local'], Math.min(timeoutMs, 3000));
+  const instances = parseDnsSdBrowseInstances(browse.stdout);
+  const hosts = [];
+
+  const boundedInstances = instances.slice(0, MAX_MDNS_DISCOVERY_HOSTS);
+  for (let index = 0; index < boundedInstances.length; index += DNS_SD_RESOLVE_CONCURRENCY) {
+    const batch = boundedInstances.slice(index, index + DNS_SD_RESOLVE_CONCURRENCY);
+    const resolvedHosts = await Promise.all(batch.map((instance) => resolveDnsSdService(instance)));
+    hosts.push(...resolvedHosts.filter(Boolean));
+  }
+
+  return hosts;
+}
+
+async function resolveDnsSdService(instance) {
+  const lookup = await runCommand('/usr/bin/dns-sd', ['-L', instance, '_ssh._tcp', 'local'], 1500);
+  const resolved = parseDnsSdLookup(instance, lookup.stdout);
+  return resolved ? normalizeAdvertisedHost(resolved) : null;
+}
+
+function parseDnsSdBrowseInstances(output = '') {
+  const instances = new Set();
+  for (const line of String(output).split('\n')) {
+    const match = line.match(/^\s*\d{1,2}:\d{2}:\d{2}\.\d+\s+Add\s+\d+\s+\d+\s+\S+\s+_ssh\._tcp\.\s+(.+?)\s*$/);
+    if (match?.[1]) {
+      instances.add(match[1].trim());
+    }
+  }
+  return [...instances];
+}
+
+function parseDnsSdLookup(instance, output = '') {
+  for (const line of String(output).split('\n')) {
+    const match = line.match(/\bcan be reached at\s+(.+?)\s*:\s*(\d+)\s*(?:\(|$)/);
+    if (!match) continue;
+    return {
+      name: instance,
+      host: normalizeHostname(match[1]),
+      port: Number.parseInt(match[2], 10),
+      addresses: [],
+      txt: {},
+    };
+  }
+  return null;
+}
+
+async function discoverOpenSshPortsWithNc(timeoutMs, iface) {
+  const targets = getScanTargets(iface);
+  if (!targets.length) return [];
+
+  const batches = Math.max(1, Math.ceil(targets.length / SCAN_CONCURRENCY));
+  const probeTimeoutMs = Math.min(
+    MAX_PROBE_TIMEOUT_MS,
+    Math.max(MIN_PROBE_TIMEOUT_MS, Math.floor((timeoutMs - 50) / batches)),
+  );
+  const connectTimeoutSec = String(Math.max(1, Math.ceil(probeTimeoutMs / 1000)));
+  const openHosts = [];
+
+  for (let index = 0; index < targets.length; index += SCAN_CONCURRENCY) {
+    const batch = targets.slice(index, index + SCAN_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (address) => {
+        const isOpen = await probeSshPortWithNc(address, SSH_PORT, connectTimeoutSec);
+        return isOpen ? address : '';
+      }),
+    );
+    openHosts.push(...results.filter(Boolean));
+  }
+
+  return openHosts.map((address) => ({
+    name: `SSH at ${address}`,
+    host: address,
+    port: SSH_PORT,
+    addresses: [address],
+    txt: {},
+    suggestedUsername: '',
+    source: 'tcp',
+  }));
+}
+
+async function probeSshPortWithNc(host, port, connectTimeoutSec) {
+  const result = await runCommand(
+    '/usr/bin/nc',
+    ['-G', connectTimeoutSec, '-vz', host, String(port)],
+    (Number(connectTimeoutSec) * 1000) + 1000,
+  );
+  return result.code === 0 && /succeeded/i.test(`${result.stdout}\n${result.stderr}`);
+}
+
+function runCommand(command, args, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      resolve({ code: -1, signal: null, stdout, stderr: `${stderr}${error.message}` });
+    });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
 }
 
 function probeSshPort(host, port, timeoutMs) {
@@ -280,9 +408,12 @@ function compareDiscoveryHost(a, b) {
 
 export {
   discover,
+  discoverWithSystemTools,
   getInterfaceScanTargets,
   normalizeAdvertisedHost,
   isPrivateIPv4,
   mergeDiscoveredHosts,
   normalizeTimeout,
+  parseDnsSdBrowseInstances,
+  parseDnsSdLookup,
 };
